@@ -41,34 +41,6 @@ api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 # 替换原来的 API_KEY_NAME 和 api_key_header
 security = HTTPBearer()
 
-# 添加 lifespan 函数定义
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    应用程序生命周期管理器
-    """
-    # 启动时执行
-    global handler
-    handler = WebClipperHandler(CONFIG)
-    UPLOAD_DIR.mkdir(exist_ok=True)
-    
-    # 如果配置中没有 API key，生成一个
-    if 'api_key' not in CONFIG:
-        CONFIG['api_key'] = secrets.token_urlsafe(32)
-        logger.info(f"Generated new API key: {CONFIG['api_key']}")
-    
-    yield
-    
-    # 关闭时执行的清理代码（如果需要的话）
-    if UPLOAD_DIR.exists():
-        shutil.rmtree(UPLOAD_DIR)
-
-# 创建应用和限速器
-app = FastAPI(lifespan=lifespan)
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """验证 Bearer 令牌"""
     token = credentials.credentials
@@ -240,43 +212,38 @@ class WebClipperHandler:
                 repo = self.github_client.get_repo(self.config['github_repo'])
                 file_path = f"clips/{filename}"
                 
-                try:
-                    # 检查文件是否已存在
-                    existing_file = repo.get_contents(file_path)
-                    logger.info(f"文件已存在，更新内容: {file_path}")
-                    repo.update_file(
-                        file_path,
-                        f"Update web clip: {filename}",
-                        content,
-                        existing_file.sha,
-                        branch="main"
-                    )
-                except Exception:
-                    logger.info(f"创建新文件: {file_path}")
-                    repo.create_file(
-                        file_path,
-                        f"Add web clip: {filename}",
-                        content,
-                        branch="main"
-                    )
+                # 直接创建新文件，因为文件名包含随机前缀，不可能重复
+                repo.create_file(
+                    file_path,
+                    f"Add web clip: {filename}",
+                    content,
+                    branch="main"
+                )
                 
                 github_url = f"https://{self.config['github_pages_domain']}/{self.config['github_repo'].split('/')[1]}/clips/{filename}"
-                logger.info(f"📑 GitHub URL: {github_url}")
+                logger.info(f"📑 文件已上传到 GitHub: {github_url}")
                 
                 # 等待 GitHub Pages 部署
                 max_deploy_retries = self.config.get('github_pages_max_retries', 60)
                 deploy_retry_interval = 5  # 秒
+                total_wait_time = max_deploy_retries * deploy_retry_interval
                 
-                logger.info(f"等待 GitHub Pages 部署 (最多 {max_deploy_retries * deploy_retry_interval} 秒)...")
+                logger.info(f"⏳ 等待 GitHub Pages 部署 (最长等待 {total_wait_time} 秒)")
                 start_time = time.time()
                 
+                # 使用同步方式检查部署
+                session = requests.Session()
                 for deploy_attempt in range(max_deploy_retries):
                     try:
-                        response = requests.get(
+                        response = session.get(
                             github_url,
                             timeout=10,
                             verify=True,
-                            headers={'Cache-Control': 'no-cache'}
+                            headers={
+                                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                                'Pragma': 'no-cache',
+                                'Expires': '0'
+                            }
                         )
                         
                         if response.status_code == 200:
@@ -284,29 +251,42 @@ class WebClipperHandler:
                             logger.info(f"✅ GitHub Pages 部署完成! 耗时: {elapsed_time:.1f} 秒")
                             return filename, github_url
                         
-                        if deploy_attempt % 6 == 0:  # 每30秒输出一次等待信息
+                        # 每30秒输出一次等待状态
+                        if deploy_attempt % 6 == 0:
                             elapsed_time = time.time() - start_time
-                            logger.info(f"⏳ 正在等待部署... ({elapsed_time:.1f} 秒)")
+                            remaining_time = total_wait_time - elapsed_time
+                            logger.info(
+                                f"⏳ 正在等待部署... "
+                                f"已等待: {elapsed_time:.1f}秒, "
+                                f"剩余最长等待时间: {remaining_time:.1f}秒"
+                            )
                         
                         time.sleep(deploy_retry_interval)
                         
                     except requests.RequestException as e:
                         if deploy_attempt % 6 == 0:
-                            logger.warning(f"部署检查失败 ({deploy_attempt + 1}/{max_deploy_retries}): {str(e)}")
+                            logger.warning(
+                                f"部署检查失败 ({deploy_attempt + 1}/{max_deploy_retries}): "
+                                f"{e.__class__.__name__}: {str(e)}"
+                            )
                         time.sleep(deploy_retry_interval)
-                        continue
                 
-                logger.warning("⚠️ GitHub Pages 部署超时，但继续处理...")
+                logger.warning(
+                    "⚠️ GitHub Pages 部署超时，但将继续处理。"
+                    "页面可能需要几分钟后才能访问。"
+                )
                 return filename, github_url
                 
             except Exception as e:
-                logger.warning(f"GitHub 上传尝试 {attempt + 1}/{max_retries} 失败: {str(e)}")
+                error_msg = f"GitHub 上传尝试 {attempt + 1}/{max_retries} 失败: {e.__class__.__name__}: {str(e)}"
                 if attempt < max_retries - 1:
+                    logger.warning(f"{error_msg} - 将在 {retry_delay} 秒后重试...")
                     time.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
                     continue
                 else:
-                    logger.error(f"❌ GitHub 上传最终失败: {str(e)}")
-                    raise
+                    logger.error(f"❌ {error_msg}")
+                    raise RuntimeError(f"GitHub 上传失败: {str(e)}") from e
 
     def url2md(self, url, max_retries=30):
         """将 URL 转换为 Markdown"""
@@ -487,22 +467,6 @@ class WebClipperHandler:
                             if soup.find(tag):
                                 title = soup.find(tag).get_text(strip=True)
                                 break
-                    
-                    # 清理标题
-                    # if title:
-                    #     title = ' '.join(title.split())
-                    #     title = re.sub(r'\s*[-|]\s*.*$', '', title)
-                    # else:
-                    #     title = os.path.basename(url)
-                    
-                    # 提取正文内容
-                    # for script in soup(["script", "style"]):
-                    #     script.decompose()
-                    
-                    # text = soup.get_text()
-                    # lines = (line.strip() for line in text.splitlines())
-                    # chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                    # text = ' '.join(chunk for chunk in chunks if chunk)
 
                     # 提取正文内容
                     html2markdown = html2text.HTML2Text()
@@ -525,6 +489,53 @@ class WebClipperHandler:
             chat_id=self.config['telegram_chat_id'],
             text=message
         )
+
+async def cleanup_old_files():
+    """定期清理超过一定时间的临时文件"""
+    while True:
+        try:
+            current_time = time.time()
+            for file_path in UPLOAD_DIR.glob('*'):
+                # 清理超过1小时的文件
+                if current_time - file_path.stat().st_mtime > 3600:
+                    try:
+                        file_path.unlink()
+                        logger.info(f"已清理过期文件: {file_path}")
+                    except Exception as e:
+                        logger.error(f"清理文件失败 {file_path}: {str(e)}")
+        except Exception as e:
+            logger.error(f"清理任务执行失败: {str(e)}")
+        
+        await asyncio.sleep(1800)  # 每30分钟执行一次
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用程序生命周期管理器"""
+    global handler
+    handler = WebClipperHandler(CONFIG)
+    UPLOAD_DIR.mkdir(exist_ok=True)
+    
+    # 启动清理任务
+    cleanup_task = asyncio.create_task(cleanup_old_files())
+    
+    yield
+    
+    # 关闭时取消清理任务
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    
+    # 清理所有临时文件
+    if UPLOAD_DIR.exists():
+        shutil.rmtree(UPLOAD_DIR)
+
+# 创建应用和限速器
+app = FastAPI(lifespan=lifespan)
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.post("/")  # 支持根路径
 @app.post("/upload")  # 支持不带斜杠的 /upload
@@ -583,7 +594,7 @@ async def upload_file(
             return result
         finally:
             if file_path.exists():
-                file_path.unlink()
+                file_path.unlink()  # 这里会删除单个处理完的文件
                 
     except HTTPException:
         raise
