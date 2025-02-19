@@ -176,14 +176,6 @@ curl -X POST "http://localhost:8000/upload" \
 - Notion 同步状态
 - Telegram 通知发送
 
-## 许可证
-
-MIT License
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
 ## Docker 部署
 
 ### 一键部署（推荐）
@@ -221,7 +213,7 @@ services:
     container_name: web-clipper
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "65331:65331"
     volumes:
       - ./config.py:/app/config.py
 ```
@@ -288,3 +280,12 @@ docker restart web-clipper
 3. 配置文件通过 volume 挂载，方便修改配置而无需重新构建镜像
 4. 容器设置了自动重启策略，服务器重启后会自动启动
 5. 建议使用 Docker Compose 来管理容器，更加方便维护
+
+
+## 许可证
+
+MIT License
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！
