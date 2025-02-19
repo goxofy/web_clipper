@@ -6,12 +6,16 @@
 
 - 🚀 支持上传 HTML 文件到 GitHub Pages
 - 📚 自动同步到 Notion 数据库
-- 🤖 使用 AI (GPT) 自动生成摘要和标签
+- 🤖 支持多种 AI 服务自动生成摘要和标签
+  - Azure OpenAI
+  - OpenAI
+  - Deepseek
 - 📱 通过 Telegram 发送剪藏通知
 - 🔒 API 密钥认证
 - ⚡ FastAPI 高性能后端
 - 🔄 自动重试机制
 - 📝 详细的日志记录
+- 🛡️ 完善的错误处理
 
 ## 安装
 
@@ -27,6 +31,7 @@ cd web-clipper-backend
 ```bash
 pip install -r requirements.txt
 ```
+
 3. 配置服务：
 
 复制 `config.example.py` 到 `config.py` 并填写配置：
@@ -127,19 +132,40 @@ curl -X POST "http://localhost:8000/upload" \
 3. 保存
 4. [Notion 模板](https://www.notion.so/cuiplus/19f32fd5f34e805a9001f2e38fc4ac74?v=19f32fd5f34e810eb20f000c0956c3b9&pvs=4)
 
+## 浏览器配置
+
+1. 安装 SingleFile 插件
+2. 配置插件：
+   - 文件名模版：`{url-host}{url-pathname-flat}.{filename-extension}`
+   - 保存到 REST API：`http://your-server:65331/upload`
+   - 授权令牌：配置文件中的 `api_key`
+
 ## 注意事项
 
-1. 确保 GitHub Pages 已正确配置
-2. Notion 数据库需要包含所有必需字段
-3. Telegram Bot 需要先与用户建立对话
-4. API 密钥需要在请求头中使用 Bearer 认证
+1. 确保所有 API 密钥和令牌的安全性
+2. 建议使用 HTTPS 代理
+3. 定期检查日志文件
+4. 配置适当的重试策略
+5. 根据需要调整超时设置
 
-## 错误处理
+## 错误处理机制
 
-服务会自动处理常见错误：
-- GitHub 上传失败会自动重试
-- 部署等待超时会继续处理
-- AI 生成失败会使用默认值
+### AI 服务错误处理
+- 支持多次重试，使用指数退避策略
+- 可配置失效时是否继续保存
+- 失效时使用默认摘要和标签
+- 可选择是否发送失效通知
+
+### Notion 同步错误处理
+- 支持多次重试，使用指数退避策略
+- 可配置保存失败时是否继续处理
+- 失败时返回占位 URL
+- 发送失败通知到 Telegram
+
+### GitHub 上传错误处理
+- 支持多次重试上传
+- 自动等待 Pages 部署完成
+- 超时后继续处理其他步骤
 
 ## 日志
 

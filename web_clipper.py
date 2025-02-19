@@ -19,6 +19,7 @@ from config import CONFIG  # 添加这行在文件开头
 from bs4 import BeautifulSoup  # 添加到导入部分
 import html2text
 from contextlib import asynccontextmanager
+import asyncio
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -137,17 +138,26 @@ class WebClipperHandler:
         
         if self.ai_provider == 'azure':
             # Azure OpenAI 配置
-            openai.api_type = "azure"
-            openai.api_key = config['azure_api_key']
-            openai.api_base = config['azure_api_base']
-            openai.api_version = config.get('azure_api_version', '2024-02-15-preview')
+            self.client = openai.AzureOpenAI(
+                api_key=config['azure_api_key'],
+                api_version=config.get('azure_api_version', '2024-02-15-preview'),
+                azure_endpoint=config['azure_api_base']
+            )
             logger.info(f"使用 Azure OpenAI API: {config['azure_api_base']}")
+        elif self.ai_provider == 'deepseek':
+            # Deepseek 配置
+            self.client = openai.OpenAI(
+                api_key=config['deepseek_api_key'],
+                base_url=config.get('deepseek_base_url', 'https://api.deepseek.com/v1')
+            )
+            logger.info(f"使用 Deepseek API: {config['deepseek_base_url']}")
         else:
             # 标准 OpenAI 配置
-            openai.api_key = config['openai_api_key']
-            if 'openai_base_url' in config:
-                openai.base_url = config['openai_base_url']
-                logger.info(f"使用自定义 OpenAI API URL: {config['openai_base_url']}")
+            self.client = openai.OpenAI(
+                api_key=config['openai_api_key'],
+                base_url=config.get('openai_base_url', 'https://api.openai.com/v1')
+            )
+            logger.info(f"使用 OpenAI API")
 
     async def process_file(self, file_path: Path, original_url: str = ''):
         """处理上传的文件"""
@@ -334,101 +344,121 @@ class WebClipperHandler:
 """ + content[:5000] + "..."
             }]
 
-            if self.ai_provider == 'azure':
-                client = openai.AzureOpenAI(
-                    api_key=self.config['azure_api_key'],
-                    api_version=self.config.get('azure_api_version', '2024-02-15-preview'),
-                    azure_endpoint=self.config['azure_api_base']
-                )
-                response = client.chat.completions.create(
-                    model=self.config['azure_deployment_name'],
-                    messages=messages,
-                    temperature=0.7,
-                    max_tokens=1000
-                )
-            else:
-                client = openai.OpenAI(
-                    api_key=self.config['openai_api_key'],
-                    base_url=self.config.get('openai_base_url')
-                )
-                response = client.chat.completions.create(
-                    model=self.config.get('openai_model', 'gpt-3.5-turbo'),
-                    messages=messages,
-                    temperature=0.7,
-                    max_tokens=1000
-                )
+            max_retries = self.config.get('openai_max_retries', 3)
+            for attempt in range(max_retries):
+                try:
+                    if self.ai_provider == 'azure':
+                        response = self.client.chat.completions.create(
+                            model=self.config['azure_deployment_name'],
+                            messages=messages
+                        )
+                    elif self.ai_provider == 'deepseek':
+                        response = self.client.chat.completions.create(
+                            model=self.config.get('deepseek_model', 'deepseek-chat'),
+                            messages=messages
+                        )
+                    else:
+                        response = self.client.chat.completions.create(
+                            model=self.config.get('openai_model', 'gpt-3.5-turbo'),
+                            messages=messages
+                        )
 
-            result = response.choices[0].message.content
-            
-            try:
-                # 使用更严格的解析逻辑
-                parts = result.split('\n')
-                summary_part = next(p for p in parts if '摘要：' in p)
-                tags_part = next(p for p in parts if '标签：' in p)
-                
-                summary = summary_part.split('摘要：', 1)[1].strip()
-                tags_str = tags_part.split('标签：', 1)[1].strip()
-                
-                # 处理标签
-                tags = [
-                    tag.strip()
-                    for tag in tags_str.replace('，', ',').split(',')
-                    if tag.strip() and len(tag.strip()) <= 20  # 限制标签长度
-                ]
-                
-                # 确保至少有一个标签
-                if not tags:
-                    tags = ["未分类"]
-                
-                # 记录生成的结果
-                logger.info("AI 生成结果:")
-                logger.info(f"摘要: {summary}")
-                logger.info(f"标签: {', '.join(tags)}")
-                
-                return summary, tags
-                
-            except Exception as e:
-                logger.error(f"解析 AI 响应失败: {str(e)}")
-                logger.error(f"AI 原始响应: {result}")
-                return "无法解析摘要", ["未分类"]
-            
+                    result = response.choices[0].message.content
+                    logger.info(f"AI 生成结果: {result}")
+
+                    # 解析摘要和标签
+                    summary = ""
+                    tags = []
+                    
+                    for line in result.split('\n'):
+                        if line.startswith('摘要：'):
+                            summary = line.replace('摘要：', '').strip()
+                        elif line.startswith('标签：'):
+                            tags = [tag.strip() for tag in line.replace('标签：', '').split('，')]
+                    
+                    if not summary or not tags:
+                        raise ValueError("AI 响应格式不正确")
+                    
+                    return summary, tags
+
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise
+                    logger.warning(f"AI 生成失败，尝试重试 ({attempt + 1}/{max_retries}): {str(e)}")
+                    time.sleep(2 ** attempt)  # 指数退避
+
         except Exception as e:
-            logger.error(f"OpenAI API 调用失败: {str(e)}")
-            if hasattr(e, 'response'):
-                logger.error(f"API 响应: {e.response}")
-            return "无法生成摘要", ["未分类"]
+            logger.error(f"AI 服务失败: {str(e)}")
+            if self.config.get('notify_on_ai_error', True):
+                try:
+                    asyncio.create_task(self.send_telegram_notification(
+                        f"⚠️ AI 服务失效提醒\n\n错误信息：{str(e)}"
+                    ))
+                except Exception as notify_error:
+                    logger.error(f"发送 AI 失效通知失败: {str(notify_error)}")
+
+            if self.config.get('skip_ai_on_error', True):
+                return (
+                    self.config.get('default_summary', "无法生成摘要"),
+                    self.config.get('default_tags', ["未分类"])
+                )
+            raise
 
     def save_to_notion(self, data):
         """保存到 Notion 数据库"""
-        try:
-            tags = data.get('tags', [])
-            if not tags:
-                tags = ["未分类"]
-            
-            current_time = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', 
-                                       time.gmtime(data['created_at']))
-            
-            properties = {
-                "Title": {"title": [{"text": {"content": data['title']}}]},
-                "OriginalURL": {"url": data['original_url'] if data['original_url'] else None},
-                "SnapshotURL": {"url": data['snapshot_url']},
-                "Summary": {"rich_text": [{"text": {"content": data['summary']}}]},
-                "Tags": {"multi_select": [{"name": tag} for tag in tags if tag.strip()]},
-                "Created": {"date": {"start": current_time}}
-            }
-            
-            response = self.notion_client.pages.create(
-                parent={"database_id": self.config['notion_database_id']},
-                properties=properties
-            )
-            
-            return response['url']
-            
-        except Exception as e:
-            logger.error(f"保存到 Notion 失败: {str(e)}")
-            if hasattr(e, 'response'):
-                logger.error(f"Notion API 响应: {e.response.text}")
-            raise
+        max_retries = 3
+        retry_delay = 2  # 初始延迟2秒
+        
+        for attempt in range(max_retries):
+            try:
+                tags = data.get('tags', [])
+                if not tags:
+                    tags = ["未分类"]
+                
+                current_time = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', 
+                                           time.gmtime(data['created_at']))
+                
+                properties = {
+                    "Title": {"title": [{"text": {"content": data['title']}}]},
+                    "OriginalURL": {"url": data['original_url'] if data['original_url'] else None},
+                    "SnapshotURL": {"url": data['snapshot_url']},
+                    "Summary": {"rich_text": [{"text": {"content": data['summary']}}]},
+                    "Tags": {"multi_select": [{"name": tag} for tag in tags if tag.strip()]},
+                    "Created": {"date": {"start": current_time}}
+                }
+                
+                # 设置超时时间
+                response = self.notion_client.pages.create(
+                    parent={"database_id": self.config['notion_database_id']},
+                    properties=properties
+                )
+                
+                return response['url']
+                
+            except Exception as e:
+                logger.error(f"保存到 Notion 尝试 {attempt + 1}/{max_retries} 失败: {str(e)}")
+                if hasattr(e, 'response'):
+                    logger.error(f"Notion API 响应: {e.response.text}")
+                
+                if attempt < max_retries - 1:
+                    # 使用指数退避策略
+                    sleep_time = retry_delay * (2 ** attempt)
+                    logger.info(f"等待 {sleep_time} 秒后重试...")
+                    time.sleep(sleep_time)
+                    continue
+                else:
+                    # 所有重试都失败了，发送通知
+                    error_msg = f"❌ Notion 保存失败: {str(e)}"
+                    try:
+                        asyncio.create_task(self.send_telegram_notification(error_msg))
+                    except Exception as notify_error:
+                        logger.error(f"发送 Notion 失败通知失败: {str(notify_error)}")
+                    
+                    # 如果配置了跳过错误，返回一个占位 URL
+                    if self.config.get('skip_notion_on_error', True):
+                        logger.warning("跳过 Notion 保存错误，继续处理...")
+                        return "https://www.notion.so/error-saving"
+                    raise
 
     def get_page_content_by_md(self, md_content):
         """从 markdown 获取标题"""

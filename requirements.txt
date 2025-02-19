@@ -14,10 +14,11 @@ notion-client==2.0.0
 python-telegram-bot==20.6
 
 # OpenAI API
-openai==1.3.5
+openai>=1.0.0
 
 # 工具库
 watchdog==3.0.0
 requests==2.31.0
 python-dotenv==1.0.0
-beautifulsoup4==4.12.2 
+beautifulsoup4==4.12.2
+html2text==2020.1.16 
