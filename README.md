@@ -88,7 +88,7 @@ CONFIG = {
 1. 启动服务：
 
 ```bash
-python web_clipper.py
+python main.py
 ```
 
 2. 发送请求：
