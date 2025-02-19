@@ -183,3 +183,108 @@ MIT License
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request！
+
+## Docker 部署
+
+### 一键部署（推荐）
+
+1. 下载部署脚本并添加执行权限：
+
+```bash
+chmod +x deploy.sh
+```
+
+2. 运行部署脚本：
+
+```bash
+./deploy.sh
+```
+
+脚本会自动：
+- 检查并安装 Docker 和 Docker Compose
+- 检查配置文件
+- 构建并启动服务
+- 显示部署状态
+
+### 手动部署
+
+1. 确保服务器已安装 Docker 和 Docker Compose
+
+2. 创建 docker-compose.yml 文件：
+
+```yaml
+version: '3'
+
+services:
+  web-clipper:
+    build: .
+    container_name: web-clipper
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.py:/app/config.py
+```
+
+3. 启动服务：
+
+```bash
+docker-compose up -d
+```
+
+4. 查看日志：
+
+```bash
+docker-compose logs -f
+```
+
+5. 停止服务：
+
+```bash
+docker-compose down
+```
+
+### 使用 Docker 命令行
+
+1. 构建镜像：
+
+```bash
+docker build -t web-clipper .
+```
+
+2. 运行容器：
+
+```bash
+docker run -d \
+  --name web-clipper \
+  -p 8000:8000 \
+  -v $(pwd)/config.py:/app/config.py \
+  --restart unless-stopped \
+  web-clipper
+```
+
+3. 查看日志：
+
+```bash
+docker logs -f web-clipper
+```
+
+4. 停止容器：
+
+```bash
+docker stop web-clipper
+```
+
+5. 重启容器：
+
+```bash
+docker restart web-clipper
+```
+
+### Docker 部署注意事项
+
+1. 确保在运行容器前已正确配置 `config.py`
+2. 容器默认使用 8000 端口，可以通过端口映射修改外部访问端口
+3. 配置文件通过 volume 挂载，方便修改配置而无需重新构建镜像
+4. 容器设置了自动重启策略，服务器重启后会自动启动
+5. 建议使用 Docker Compose 来管理容器，更加方便维护
