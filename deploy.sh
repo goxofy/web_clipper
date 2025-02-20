@@ -31,19 +31,28 @@ if [ ! -f config.py ]; then
 fi
 
 # 检查并删除旧容器和镜像
-CONTAINER_ID=$(docker ps -aqf "name=web-clipper")
-if [ ! -z "$CONTAINER_ID" ]; then
-    echo -e "${YELLOW}检测到旧容器，正在停止...${NC}"
-    docker stop web-clipper
+echo -e "${YELLOW}检查旧的容器和镜像...${NC}"
+
+# 停止并删除旧容器
+if docker ps -a --format '{{.Names}}' | grep -q "^web-clipper$"; then
+    echo -e "${YELLOW}发现旧容器，正在停止...${NC}"
+    docker stop web-clipper || true
     echo -e "${YELLOW}正在删除旧容器...${NC}"
-    docker rm web-clipper
-    
-    # 获取容器使用的镜像ID
-    IMAGE_ID=$(docker inspect --format='{{.Image}}' "$CONTAINER_ID")
-    if [ ! -z "$IMAGE_ID" ]; then
-        echo -e "${YELLOW}正在删除旧镜像...${NC}"
-        docker rmi "$IMAGE_ID" -f
-    fi
+    docker rm web-clipper || true
+fi
+
+# 查找并删除旧镜像
+OLD_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "web-clipper")
+if [ ! -z "$OLD_IMAGE" ]; then
+    echo -e "${YELLOW}发现旧镜像: ${OLD_IMAGE}，正在删除...${NC}"
+    docker rmi $OLD_IMAGE || true
+fi
+
+# 清理可能存在的悬空镜像（dangling images）
+DANGLING_IMAGES=$(docker images -f "dangling=true" -q)
+if [ ! -z "$DANGLING_IMAGES" ]; then
+    echo -e "${YELLOW}清理悬空镜像...${NC}"
+    docker rmi $DANGLING_IMAGES || true
 fi
 
 # 构建镜像
@@ -60,4 +69,4 @@ if [ $? -eq 0 ]; then
     echo -e "可以使用以下命令查看日志：\n${YELLOW}docker-compose logs -f${NC}"
 else
     echo -e "${YELLOW}服务启动失败，请检查日志${NC}"
-fi 
+fi
