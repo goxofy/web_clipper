@@ -30,6 +30,26 @@ if [ ! -f config.py ]; then
     exit 1
 fi
 
+# 检查并删除旧容器和镜像
+CONTAINER_ID=$(docker ps -aqf "name=web-clipper")
+if [ ! -z "$CONTAINER_ID" ]; then
+    echo -e "${YELLOW}检测到旧容器，正在停止...${NC}"
+    docker stop web-clipper
+    echo -e "${YELLOW}正在删除旧容器...${NC}"
+    docker rm web-clipper
+    
+    # 获取容器使用的镜像ID
+    IMAGE_ID=$(docker inspect --format='{{.Image}}' "$CONTAINER_ID")
+    if [ ! -z "$IMAGE_ID" ]; then
+        echo -e "${YELLOW}正在删除旧镜像...${NC}"
+        docker rmi "$IMAGE_ID" -f
+    fi
+fi
+
+# 构建镜像
+echo -e "${GREEN}开始构建 Docker 镜像...${NC}"
+docker-compose build
+
 # 启动服务
 echo -e "${GREEN}开始启动服务...${NC}"
 docker-compose up -d --build

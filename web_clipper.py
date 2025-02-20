@@ -182,7 +182,8 @@ class WebClipperHandler:
                 f"📑 {title}\n\n"
                 f"📝 {summary}\n\n"
                 f"🔗 原始链接：{original_url}\n"
-                f"📚 快照链接：{github_url}"
+                f"📚 快照链接：{github_url}\n"
+                f"📚 Notion笔记: {notion_url}"
             )
             await self.send_telegram_notification(notification)
             
