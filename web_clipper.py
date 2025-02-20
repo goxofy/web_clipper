@@ -234,34 +234,39 @@ class WebClipperHandler:
                 
                 # 等待 GitHub Pages 部署
                 max_deploy_retries = self.config.get('github_pages_max_retries', 60)
-                deploy_retry_interval = 5  # 秒
+                deploy_retry_interval = 3  # 秒
                 total_wait_time = max_deploy_retries * deploy_retry_interval
                 
                 logger.info(f"⏳ 等待 GitHub Pages 部署 (最长等待 {total_wait_time} 秒)")
                 start_time = time.time()
                 
-                # 使用同步方式检查部署
                 session = requests.Session()
+                consecutive_successes = 0  # 连续成功次数
+                required_successes = 2  # 需要连续成功的次数
+                
                 for deploy_attempt in range(max_deploy_retries):
                     try:
                         response = session.get(
                             github_url,
-                            timeout=10,
+                            timeout=5,
                             verify=True,
                             headers={
-                                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                                'Cache-Control': 'no-cache',
                                 'Pragma': 'no-cache',
-                                'Expires': '0'
                             }
                         )
                         
                         if response.status_code == 200:
-                            elapsed_time = time.time() - start_time
-                            logger.info(f"✅ GitHub Pages 部署完成! 耗时: {elapsed_time:.1f} 秒")
-                            return filename, github_url
+                            consecutive_successes += 1
+                            if consecutive_successes >= required_successes:
+                                elapsed_time = time.time() - start_time
+                                logger.info(f"✅ GitHub Pages 部署完成! 耗时: {elapsed_time:.1f} 秒")
+                                return filename, github_url
+                        else:
+                            consecutive_successes = 0
                         
-                        # 每30秒输出一次等待状态
-                        if deploy_attempt % 6 == 0:
+                        # 每15秒输出一次等待状态
+                        if deploy_attempt % 5 == 0:
                             elapsed_time = time.time() - start_time
                             remaining_time = total_wait_time - elapsed_time
                             logger.info(
@@ -273,7 +278,8 @@ class WebClipperHandler:
                         time.sleep(deploy_retry_interval)
                         
                     except requests.RequestException as e:
-                        if deploy_attempt % 6 == 0:
+                        consecutive_successes = 0
+                        if deploy_attempt % 5 == 0:
                             logger.warning(
                                 f"部署检查失败 ({deploy_attempt + 1}/{max_deploy_retries}): "
                                 f"{e.__class__.__name__}: {str(e)}"
