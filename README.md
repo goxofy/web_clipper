@@ -10,6 +10,7 @@
   - Azure OpenAI
   - OpenAI
   - Deepseek
+  - Gemini
 - 📱 通过 Telegram 发送剪藏通知
 - 🔒 API 密钥认证
 - ⚡ FastAPI 高性能后端
@@ -22,10 +23,10 @@
 1. 克隆仓库：
 
 ```bash
-git clone https://github.com/yourusername/web-clipper-backend.git
-cd web-clipper-backend
+git clone https://github.com/cuijianzhuang/web_clipper.git
+cd web_clipper
 ```
-
+https://github.com/cuijianzhuang/web_clipper
 2. 安装依赖：
 
 ```bash
@@ -47,7 +48,7 @@ CONFIG = {
 'telegram_chat_id': 'your-chat-id', # Telegram 聊天 ID
 'api_key': 'your-api-key', # API 访问密钥
 'port': 8000, # 服务端口
-# AI 服务配置（二选一）
+# AI 服务配置（四选一）
 # OpenAI 配置
 'ai_provider': 'openai',
 'openai_api_key': 'your-openai-key',
@@ -57,6 +58,17 @@ CONFIG = {
 'azure_api_key': 'your-azure-key',
 'azure_api_base': 'https://your-resource.openai.azure.com/',
 'azure_deployment_name': 'your-deployment-name',
+# Gemini 配置
+'gemini_api_key': 'your-gemini-api-key',
+'gemini_model': 'gemini-1.5-flash',
+# OpenAI 配置
+'openai_api_key': 'sk-xxxxx',  # OpenAI API 密钥
+'openai_base_url': 'https://api.openai.com/v1',  # API 基础 URL，可选用第三方代理
+'openai_model': 'gpt-3.5-turbo',  # 使用的模型名称
+# Deepseek 配置
+'deepseek_api_key': 'sk-xxxxx',  # Deepseek API 密钥
+'deepseek_base_url': 'https://api.deepseek.com/v1',  # Deepseek API 基础 URL
+'deepseek_model': 'deepseek-chat',  # 使用的模型名称
 }
 ```
 
@@ -119,18 +131,37 @@ curl -X POST "http://localhost:8000/upload" \
 }
 ```
 
-## 本地操作
-1. 浏览器安装 singlefile 插件 https://chromewebstore.google.com/detail/singlefile/mpiodijhokgodhhofbcjdecpffjipkle
-2. 配置插件（只需要配置一次，支持云端同步）： 
-	1. 文件名-模版： {url-host}{url-pathname-flat}.{filename-extension}   
-	2. 文件名-最大长度：   384字符
-	3. 文件名-替换字符：$
-	4. 保存位置-保存到 REST 表单 API-网址: 你的服务器 ip，自行解决端口访问问题
-	5. 保存位置-保存到 REST 表单 API-授权令牌： 第二步里面配置的 Bearer Key
-	6. 保存位置-保存到 REST 表单 API-文件字段名称： singlehtmlfile
-	7. 保存位置-保存到 REST 表单 API-网址字段名称： url
-3. 保存
-4. [Notion 模板](https://www.notion.so/cuiplus/19f32fd5f34e805a9001f2e38fc4ac74?v=19f32fd5f34e810eb20f000c0956c3b9&pvs=4)
+## 本地操作配置
+
+### SingleFile 插件配置
+
+1. 从 [Chrome 网上应用店](https://chromewebstore.google.com/detail/singlefile/mpiodijhokgodhhofbcjdecpffjipkle) 安装 SingleFile 插件
+
+2. 配置插件（只需配置一次，支持云端同步）：
+   - **文件名设置**
+     - 文件名模版：`{url-host}{url-pathname-flat}.{filename-extension}`
+     - 最大长度：384 字符
+     - 替换字符：`$`
+   
+   - **保存位置设置**
+     - 选择"保存到 REST 表单 API"
+     - 网址：`http://your-server:port/upload`（根据实际部署地址配置）
+     - 授权令牌：配置文件中的 `api_key`（格式：Bearer your-api-key）
+     - 文件字段名称：`singlehtmlfile`
+     - 网址字段名称：`url`
+
+3. 保存配置
+
+### Notion 数据库配置
+
+1. 使用 [Notion 模板](https://www.notion.so/cuiplus/19f32fd5f34e805a9001f2e38fc4ac74?v=19f32fd5f34e810eb20f000c0956c3b9&pvs=4) ，复制到自己的工作空间，创建数据库
+2. 确保数据库包含以下字段：
+   - Title（标题）
+   - OriginalURL（原始链接）
+   - SnapshotURL（快照链接）
+   - Summary（摘要）
+   - Tags（标签）
+   - Created（创建时间）
 
 ## 浏览器配置
 

@@ -2,7 +2,7 @@ CONFIG = {
     # 基础配置
     'host': '0.0.0.0',  # 服务器监听地址
     'port': 65331,      # 服务器端口
-    'api_key': '123456',  # API 访问密钥，用于 Bearer 认证
+    'api_key': 'your_api_key',  # API 访问密钥，用于 Bearer 认证
 
     # GitHub 配置
     'github_repo': 'username/repo',  # GitHub 仓库，格式：用户名/仓库名
@@ -18,8 +18,8 @@ CONFIG = {
     'telegram_token': 'botxxxxx:xxxxxx',  # Telegram Bot Token
     'telegram_chat_id': '123456789',  # Telegram 聊天 ID
 
-    # AI 服务配置（三选一：azure, openai, deepseek）
-    'ai_provider': 'azure',  # 可选: 'azure', 'openai', 'deepseek'
+    # AI 服务配置（四选一：azure, openai, deepseek, gemini）
+    'ai_provider': 'gemini',  # 可选: 'azure', 'openai', 'deepseek', 'gemini'
 
     # Azure OpenAI 配置
     'azure_api_key': 'azure_api_key',  # Azure OpenAI API 密钥
@@ -36,6 +36,10 @@ CONFIG = {
     'deepseek_api_key': 'sk-xxxxx',  # Deepseek API 密钥
     'deepseek_base_url': 'https://api.deepseek.com/v1',  # Deepseek API 基础 URL
     'deepseek_model': 'deepseek-chat',  # 使用的模型名称
+
+    # Gemini 配置
+    'gemini_api_key': 'your-gemini-api-key',  # Gemini API 密钥
+    'gemini_model': 'gemini-1.5-flash',  # 使用的模型名称
 
     # 文件处理配置
     'max_file_size': 30 * 1024 * 1024,  # 最大文件大小（30MB）
