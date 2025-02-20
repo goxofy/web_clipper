@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup  # 添加到导入部分
 import html2text
 from contextlib import asynccontextmanager
 import asyncio
+import google.generativeai as genai
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -123,6 +124,13 @@ class WebClipperHandler:
                 base_url=config.get('deepseek_base_url', 'https://api.deepseek.com/v1')
             )
             logger.info(f"使用 Deepseek API: {config['deepseek_base_url']}")
+        elif self.ai_provider == 'gemini':
+            # Gemini 配置
+            genai.configure(api_key=config['gemini_api_key'])
+            self.client = genai.GenerativeModel(
+                model_name=config.get('gemini_model', 'gemini-1.5-flash')
+            )
+            logger.info(f"使用 Gemini API")
         else:
             # 标准 OpenAI 配置
             self.client = openai.OpenAI(
@@ -307,9 +315,7 @@ class WebClipperHandler:
     def generate_summary_tags(self, content):
         """使用 AI 生成摘要和标签"""
         try:
-            messages = [{
-                "role": "user",
-                "content": """请为以下网页内容生成简短摘要和相关标签。
+            prompt = """请为以下网页内容生成简短摘要和相关标签。
 
 要求：
 1. 无论原文是中文还是英文，都必须用中文回复
@@ -322,7 +328,6 @@ class WebClipperHandler:
 
 网页内容：
 """ + content[:5000] + "..."
-            }]
 
             max_retries = self.config.get('openai_max_retries', 3)
             for attempt in range(max_retries):
@@ -330,20 +335,65 @@ class WebClipperHandler:
                     if self.ai_provider == 'azure':
                         response = self.client.chat.completions.create(
                             model=self.config['azure_deployment_name'],
-                            messages=messages
+                            messages=[{"role": "user", "content": prompt}]
                         )
+                        result = response.choices[0].message.content
                     elif self.ai_provider == 'deepseek':
                         response = self.client.chat.completions.create(
                             model=self.config.get('deepseek_model', 'deepseek-chat'),
-                            messages=messages
+                            messages=[{"role": "user", "content": prompt}]
                         )
+                        result = response.choices[0].message.content
+                    elif self.ai_provider == 'gemini':
+                        # 修改 Gemini 调用方式
+                        try:
+                            response = self.client.generate_content(
+                                prompt,
+                                generation_config={
+                                    "temperature": 0.7,
+                                    "top_p": 0.8,
+                                    "top_k": 40,
+                                    "max_output_tokens": 1024,
+                                },
+                                safety_settings=[
+                                    {
+                                        "category": "HARM_CATEGORY_HARASSMENT",
+                                        "threshold": "BLOCK_NONE",
+                                    },
+                                    {
+                                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                                        "threshold": "BLOCK_NONE",
+                                    },
+                                    {
+                                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                                        "threshold": "BLOCK_NONE",
+                                    },
+                                    {
+                                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                                        "threshold": "BLOCK_NONE",
+                                    },
+                                ]
+                            )
+                            
+                            if response.prompt_feedback.block_reason:
+                                raise Exception(f"Content blocked: {response.prompt_feedback.block_reason}")
+                                
+                            result = response.text
+                            
+                            # 如果返回为空，抛出异常
+                            if not result.strip():
+                                raise Exception("Empty response from Gemini")
+                                
+                        except Exception as e:
+                            logger.error(f"Gemini API error: {str(e)}")
+                            raise
                     else:
                         response = self.client.chat.completions.create(
                             model=self.config.get('openai_model', 'gpt-3.5-turbo'),
-                            messages=messages
+                            messages=[{"role": "user", "content": prompt}]
                         )
+                        result = response.choices[0].message.content
 
-                    result = response.choices[0].message.content
                     logger.info(f"AI 生成结果: {result}")
 
                     # 解析摘要和标签
