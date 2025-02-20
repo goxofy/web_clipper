@@ -26,7 +26,6 @@
 git clone https://github.com/cuijianzhuang/web_clipper.git
 cd web_clipper
 ```
-https://github.com/cuijianzhuang/web_clipper
 2. 安装依赖：
 
 ```bash
