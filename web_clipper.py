@@ -1,5 +1,7 @@
 import os
 import time
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 import requests
 from github import Github
 import openai
@@ -8,19 +10,21 @@ import telegram
 import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Header, Request, Body
 import uvicorn
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import shutil
 from pathlib import Path
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
+from typing import Optional
 import secrets
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from config import CONFIG  # 添加这行在文件开头
+import re
 from bs4 import BeautifulSoup  # 添加到导入部分
+from fastapi.responses import JSONResponse
 import html2text
-from contextlib import asynccontextmanager
-import asyncio
-import google.generativeai as genai
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -29,12 +33,9 @@ logger = logging.getLogger(__name__)
 # 设置 httpx 日志级别为 WARNING，隐藏请求日志
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# 定义全局变量
-handler = None
-UPLOAD_DIR = Path("uploads")
-
 # 配置限制
 MAX_FILE_SIZE = CONFIG.get('max_file_size', 10 * 1024 * 1024)  # 从配置中获取最大文件大小
+#ALLOWED_EXTENSIONS = {'.html', '.htm'}
 ALLOWED_EXTENSIONS = set(CONFIG.get('allowed_extensions', ['.html', '.htm']))
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
@@ -106,38 +107,6 @@ class WebClipperHandler:
         self.notion_client = Client(auth=config['notion_token'])
         self.telegram_bot = telegram.Bot(token=config['telegram_token'])
         
-        # 配置 AI 服务
-        self.ai_provider = config.get('ai_provider', 'openai').lower()
-        
-        if self.ai_provider == 'azure':
-            # Azure OpenAI 配置
-            self.client = openai.AzureOpenAI(
-                api_key=config['azure_api_key'],
-                api_version=config.get('azure_api_version', '2024-02-15-preview'),
-                azure_endpoint=config['azure_api_base']
-            )
-            logger.info(f"使用 Azure OpenAI API: {config['azure_api_base']}")
-        elif self.ai_provider == 'deepseek':
-            # Deepseek 配置
-            self.client = openai.OpenAI(
-                api_key=config['deepseek_api_key'],
-                base_url=config.get('deepseek_base_url', 'https://api.deepseek.com/v1')
-            )
-            logger.info(f"使用 Deepseek API: {config['deepseek_base_url']}")
-        elif self.ai_provider == 'gemini':
-            # Gemini 配置
-            genai.configure(api_key=config['gemini_api_key'])
-            self.client = genai.GenerativeModel(
-                model_name=config.get('gemini_model', 'gemini-1.5-flash')
-            )
-            logger.info(f"使用 Gemini API")
-        else:
-            # 标准 OpenAI 配置
-            self.client = openai.OpenAI(
-                api_key=config['openai_api_key'],
-                base_url=config.get('openai_base_url', 'https://api.openai.com/v1')
-            )
-            logger.info(f"使用 OpenAI API")
 
     async def process_file(self, file_path: Path, original_url: str = ''):
         """处理上传的文件"""
@@ -210,99 +179,26 @@ class WebClipperHandler:
     def upload_to_github(self, html_path):
         """上传 HTML 文件到 GitHub Pages"""
         filename = os.path.basename(html_path)
-        max_retries = 5
-        retry_delay = 3  # 秒
         
         with open(html_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
+        repo = self.github_client.get_repo(self.config['github_repo'])
+        file_path = f"clips/{filename}"
+        repo.create_file(
+            file_path,
+            f"Add web clip: {filename}",
+            content,
+            branch="main"
+        )
+        
+        github_url = f"https://{self.config['github_pages_domain']}/{self.config['github_repo'].split('/')[1]}/clips/{filename}"
+        
+        # 等待 GitHub Pages 部署
+        max_retries = self.config.get('github_pages_max_retries', 60)
         for attempt in range(max_retries):
             try:
-                repo = self.github_client.get_repo(self.config['github_repo'])
-                file_path = f"clips/{filename}"
-                
-                # 直接创建新文件，因为文件名包含随机前缀，不可能重复
-                repo.create_file(
-                    file_path,
-                    f"Add web clip: {filename}",
-                    content,
-                    branch="main"
-                )
-                
-                github_url = f"https://{self.config['github_pages_domain']}/{self.config['github_repo'].split('/')[1]}/clips/{filename}"
-                logger.info(f"📑 文件已上传到 GitHub: {github_url}")
-                
-                # 等待 GitHub Pages 部署
-                max_deploy_retries = self.config.get('github_pages_max_retries', 60)
-                deploy_retry_interval = 3  # 秒
-                total_wait_time = max_deploy_retries * deploy_retry_interval
-                
-                logger.info(f"⏳ 等待 GitHub Pages 部署 (最长等待 {total_wait_time} 秒)")
-                start_time = time.time()
-                
-                session = requests.Session()
-                consecutive_successes = 0  # 连续成功次数
-                required_successes = 2  # 需要连续成功的次数
-                
-                for deploy_attempt in range(max_deploy_retries):
-                    try:
-                        response = session.get(
-                            github_url,
-                            timeout=5,
-                            verify=True,
-                            headers={
-                                'Cache-Control': 'no-cache',
-                                'Pragma': 'no-cache',
-                            }
-                        )
-                        
-                        if response.status_code == 200:
-                            consecutive_successes += 1
-                            if consecutive_successes >= required_successes:
-                                elapsed_time = time.time() - start_time
-                                logger.info(f"✅ GitHub Pages 部署完成! 耗时: {elapsed_time:.1f} 秒")
-                                return filename, github_url
-                        else:
-                            consecutive_successes = 0
-                        
-                        # 每15秒输出一次等待状态
-                        if deploy_attempt % 5 == 0:
-                            elapsed_time = time.time() - start_time
-                            remaining_time = total_wait_time - elapsed_time
-                            logger.info(
-                                f"⏳ 正在等待部署... "
-                                f"已等待: {elapsed_time:.1f}秒, "
-                                f"剩余最长等待时间: {remaining_time:.1f}秒"
-                            )
-                        
-                        time.sleep(deploy_retry_interval)
-                        
-                    except requests.RequestException as e:
-                        consecutive_successes = 0
-                        if deploy_attempt % 5 == 0:
-                            logger.warning(
-                                f"部署检查失败 ({deploy_attempt + 1}/{max_deploy_retries}): "
-                                f"{e.__class__.__name__}: {str(e)}"
-                            )
-                        time.sleep(deploy_retry_interval)
-                
-                logger.warning(
-                    "⚠️ GitHub Pages 部署超时，但将继续处理。"
-                    "页面可能需要几分钟后才能访问。"
-                )
-                return filename, github_url
-                
-            except Exception as e:
-                error_msg = f"GitHub 上传尝试 {attempt + 1}/{max_retries} 失败: {e.__class__.__name__}: {str(e)}"
-                if attempt < max_retries - 1:
-                    logger.warning(f"{error_msg} - 将在 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # 指数退避
-                    continue
-                else:
-                    logger.error(f"❌ {error_msg}")
-                    raise RuntimeError(f"GitHub 上传失败: {str(e)}") from e
-
+              
     def url2md(self, url, max_retries=30):
         """将 URL 转换为 Markdown"""
         try:
@@ -322,180 +218,6 @@ class WebClipperHandler:
     def generate_summary_tags(self, content):
         """使用 AI 生成摘要和标签"""
         try:
-            prompt = """请为以下网页内容生成简短摘要和相关标签。
-
-要求：
-1. 无论原文是中文还是英文，都必须用中文回复
-2. 摘要控制在100字以内
-3. 生成3-5个中文标签
-4. 严格按照以下格式返回：
-
-摘要：[100字以内的中文摘要]
-标签：tag1，tag2，tag3，tag4，tag5
-
-网页内容：
-""" + content[:5000] + "..."
-
-            max_retries = self.config.get('openai_max_retries', 3)
-            for attempt in range(max_retries):
-                try:
-                    if self.ai_provider == 'azure':
-                        response = self.client.chat.completions.create(
-                            model=self.config['azure_deployment_name'],
-                            messages=[{"role": "user", "content": prompt}]
-                        )
-                        result = response.choices[0].message.content
-                    elif self.ai_provider == 'deepseek':
-                        response = self.client.chat.completions.create(
-                            model=self.config.get('deepseek_model', 'deepseek-chat'),
-                            messages=[{"role": "user", "content": prompt}]
-                        )
-                        result = response.choices[0].message.content
-                    elif self.ai_provider == 'gemini':
-                        # 修改 Gemini 调用方式
-                        try:
-                            response = self.client.generate_content(
-                                prompt,
-                                generation_config={
-                                    "temperature": 0.7,
-                                    "top_p": 0.8,
-                                    "top_k": 40,
-                                    "max_output_tokens": 1024,
-                                },
-                                safety_settings=[
-                                    {
-                                        "category": "HARM_CATEGORY_HARASSMENT",
-                                        "threshold": "BLOCK_NONE",
-                                    },
-                                    {
-                                        "category": "HARM_CATEGORY_HATE_SPEECH",
-                                        "threshold": "BLOCK_NONE",
-                                    },
-                                    {
-                                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                                        "threshold": "BLOCK_NONE",
-                                    },
-                                    {
-                                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                                        "threshold": "BLOCK_NONE",
-                                    },
-                                ]
-                            )
-                            
-                            if response.prompt_feedback.block_reason:
-                                raise Exception(f"Content blocked: {response.prompt_feedback.block_reason}")
-                                
-                            result = response.text
-                            
-                            # 如果返回为空，抛出异常
-                            if not result.strip():
-                                raise Exception("Empty response from Gemini")
-                                
-                        except Exception as e:
-                            logger.error(f"Gemini API error: {str(e)}")
-                            raise
-                    else:
-                        response = self.client.chat.completions.create(
-                            model=self.config.get('openai_model', 'gpt-3.5-turbo'),
-                            messages=[{"role": "user", "content": prompt}]
-                        )
-                        result = response.choices[0].message.content
-
-                    logger.info(f"AI 生成结果: {result}")
-
-                    # 解析摘要和标签
-                    summary = ""
-                    tags = []
-                    
-                    for line in result.split('\n'):
-                        if line.startswith('摘要：'):
-                            summary = line.replace('摘要：', '').strip()
-                        elif line.startswith('标签：'):
-                            tags = [tag.strip() for tag in line.replace('标签：', '').split('，')]
-                    
-                    if not summary or not tags:
-                        raise ValueError("AI 响应格式不正确")
-                    
-                    return summary, tags
-
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise
-                    logger.warning(f"AI 生成失败，尝试重试 ({attempt + 1}/{max_retries}): {str(e)}")
-                    time.sleep(2 ** attempt)  # 指数退避
-
-        except Exception as e:
-            logger.error(f"AI 服务失败: {str(e)}")
-            if self.config.get('notify_on_ai_error', True):
-                try:
-                    asyncio.create_task(self.send_telegram_notification(
-                        f"⚠️ AI 服务失效提醒\n\n错误信息：{str(e)}"
-                    ))
-                except Exception as notify_error:
-                    logger.error(f"发送 AI 失效通知失败: {str(notify_error)}")
-
-            if self.config.get('skip_ai_on_error', True):
-                return (
-                    self.config.get('default_summary', "无法生成摘要"),
-                    self.config.get('default_tags', ["未分类"])
-                )
-            raise
-
-    def save_to_notion(self, data):
-        """保存到 Notion 数据库"""
-        max_retries = 3
-        retry_delay = 2  # 初始延迟2秒
-        
-        for attempt in range(max_retries):
-            try:
-                tags = data.get('tags', [])
-                if not tags:
-                    tags = ["未分类"]
-                
-                current_time = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', 
-                                           time.gmtime(data['created_at']))
-                
-                properties = {
-                    "Title": {"title": [{"text": {"content": data['title']}}]},
-                    "OriginalURL": {"url": data['original_url'] if data['original_url'] else None},
-                    "SnapshotURL": {"url": data['snapshot_url']},
-                    "Summary": {"rich_text": [{"text": {"content": data['summary']}}]},
-                    "Tags": {"multi_select": [{"name": tag} for tag in tags if tag.strip()]},
-                    "Created": {"date": {"start": current_time}}
-                }
-                
-                # 设置超时时间
-                response = self.notion_client.pages.create(
-                    parent={"database_id": self.config['notion_database_id']},
-                    properties=properties
-                )
-                
-                return response['url']
-                
-            except Exception as e:
-                logger.error(f"保存到 Notion 尝试 {attempt + 1}/{max_retries} 失败: {str(e)}")
-                if hasattr(e, 'response'):
-                    logger.error(f"Notion API 响应: {e.response.text}")
-                
-                if attempt < max_retries - 1:
-                    # 使用指数退避策略
-                    sleep_time = retry_delay * (2 ** attempt)
-                    logger.info(f"等待 {sleep_time} 秒后重试...")
-                    time.sleep(sleep_time)
-                    continue
-                else:
-                    # 所有重试都失败了，发送通知
-                    error_msg = f"❌ Notion 保存失败: {str(e)}"
-                    try:
-                        asyncio.create_task(self.send_telegram_notification(error_msg))
-                    except Exception as notify_error:
-                        logger.error(f"发送 Notion 失败通知失败: {str(notify_error)}")
-                    
-                    # 如果配置了跳过错误，返回一个占位 URL
-                    if self.config.get('skip_notion_on_error', True):
-                        logger.warning("跳过 Notion 保存错误，继续处理...")
-                        return "https://www.notion.so/error-saving"
-                    raise
 
     def get_page_content_by_md(self, md_content):
         """从 markdown 获取标题"""
@@ -547,56 +269,6 @@ class WebClipperHandler:
             text=message
         )
 
-async def cleanup_old_files():
-    """定期清理超过一定时间的临时文件"""
-    while True:
-        try:
-            current_time = time.time()
-            for file_path in UPLOAD_DIR.glob('*'):
-                # 清理超过1小时的文件
-                if current_time - file_path.stat().st_mtime > 3600:
-                    try:
-                        file_path.unlink()
-                        logger.info(f"已清理过期文件: {file_path}")
-                    except Exception as e:
-                        logger.error(f"清理文件失败 {file_path}: {str(e)}")
-        except Exception as e:
-            logger.error(f"清理任务执行失败: {str(e)}")
-        
-        await asyncio.sleep(1800)  # 每30分钟执行一次
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """应用程序生命周期管理器"""
-    global handler
-    handler = WebClipperHandler(CONFIG)
-    UPLOAD_DIR.mkdir(exist_ok=True)
-    
-    # 启动清理任务
-    cleanup_task = asyncio.create_task(cleanup_old_files())
-    
-    yield
-    
-    # 关闭时取消清理任务
-    cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
-    
-    # 清理所有临时文件
-    if UPLOAD_DIR.exists():
-        shutil.rmtree(UPLOAD_DIR)
-
-# 创建应用和限速器
-app = FastAPI(lifespan=lifespan)
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-@app.post("/")  # 支持根路径
-@app.post("/upload")  # 支持不带斜杠的 /upload
-@app.post("/upload/")  # 保持原有的 /upload/
 @limiter.limit("10/minute", key_func=get_remote_address)
 async def upload_file(
     request: Request,
@@ -665,7 +337,4 @@ async def upload_file(
 
 def start_server(host="0.0.0.0", port=8000):
     """启动服务器"""
-    logger.info(f"Starting server on {host}:{port}")
-    logger.info(f"Upload endpoints: /, /upload, /upload/")
-    logger.info(f"API Key required in Bearer token")
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port) 
