@@ -40,15 +40,6 @@ ALLOWED_EXTENSIONS = set(CONFIG.get('allowed_extensions', ['.html', '.htm']))
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
-# 创建应用和限速器
-app = FastAPI()
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-handler = None
-UPLOAD_DIR = Path("uploads")
-
 # 替换原来的 API_KEY_NAME 和 api_key_header
 security = HTTPBearer()
 
@@ -116,11 +107,6 @@ class WebClipperHandler:
         self.notion_client = Client(auth=config['notion_token'])
         self.telegram_bot = telegram.Bot(token=config['telegram_token'])
         
-        # 配置 OpenAI
-        openai.api_key = config['openai_api_key']
-        if 'openai_base_url' in config:
-            openai.base_url = config['openai_base_url']
-            logger.info(f"使用自定义 OpenAI API URL: {config['openai_base_url']}")
 
     async def process_file(self, file_path: Path, original_url: str = ''):
         """处理上传的文件"""
@@ -165,7 +151,8 @@ class WebClipperHandler:
                 f"📑 {title}\n\n"
                 f"📝 {summary}\n\n"
                 f"🔗 原始链接：{original_url}\n"
-                f"📚 快照链接：{github_url}"
+                f"📚 快照链接：{github_url}\n"
+                f"📚 Notion笔记: {notion_url}"
             )
             await self.send_telegram_notification(notification)
             
@@ -211,15 +198,7 @@ class WebClipperHandler:
         max_retries = self.config.get('github_pages_max_retries', 60)
         for attempt in range(max_retries):
             try:
-                response = requests.get(github_url)
-                if response.status_code == 200:
-                    break
-                time.sleep(5)
-            except Exception:
-                time.sleep(5)
-        
-        return filename, github_url
-    
+              
     def url2md(self, url, max_retries=30):
         """将 URL 转换为 Markdown"""
         try:
@@ -239,84 +218,6 @@ class WebClipperHandler:
     def generate_summary_tags(self, content):
         """使用 AI 生成摘要和标签"""
         try:
-            client = openai.OpenAI(
-                api_key=self.config['openai_api_key'],
-                base_url=self.config.get('openai_base_url')
-            )
-            
-            model = self.config.get('openai_model', 'gpt-3.5-turbo')
-            
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{
-                    "role": "user",
-                    "content": """请为以下网页(已转换为Markdown格式)内容生成简短摘要和相关标签。 
-                    请严格按照以下格式返回(英文网页请以中文返回)：
-                    摘要：[100字以内的摘要]
-                    标签：tag1，tag2，tag3，tag4，tag5
-
-                    网页(已转换为markdown格式)内容：
-                    """ + content[:5000] + "..."
-                }]
-            )
-
-            
-            result = response.choices[0].message.content
-            
-            try:
-                parts = result.split('\n')
-                summary_part = next(p for p in parts if p.startswith('摘要：'))
-                tags_part = next(p for p in parts if p.startswith('标签：'))
-                
-                summary = summary_part.replace('摘要：', '').strip()
-                tags_str = tags_part.replace('标签：', '').strip()
-                tags = [
-                    tag.strip()[:20]
-                    for tag in tags_str.replace('，', ',').split(',')
-                    if tag.strip()
-                ]
-                
-                return summary, tags
-                
-            except Exception as e:
-                logger.error(f"解析 AI 响应失败: {str(e)}")
-                return "无法解析摘要", ["未分类"]
-            
-        except Exception as e:
-            logger.error(f"OpenAI API 调用失败: {str(e)}")
-            return "无法生成摘要", ["未分类"]
-
-    def save_to_notion(self, data):
-        """保存到 Notion 数据库"""
-        try:
-            tags = data.get('tags', [])
-            if not tags:
-                tags = ["未分类"]
-            
-            current_time = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', 
-                                       time.gmtime(data['created_at']))
-            
-            properties = {
-                "Title": {"title": [{"text": {"content": data['title']}}]},
-                "OriginalURL": {"url": data['original_url'] if data['original_url'] else None},
-                "SnapshotURL": {"url": data['snapshot_url']},
-                "Summary": {"rich_text": [{"text": {"content": data['summary']}}]},
-                "Tags": {"multi_select": [{"name": tag} for tag in tags if tag.strip()]},
-                "Created": {"date": {"start": current_time}}
-            }
-            
-            response = self.notion_client.pages.create(
-                parent={"database_id": self.config['notion_database_id']},
-                properties=properties
-            )
-            
-            return response['url']
-            
-        except Exception as e:
-            logger.error(f"保存到 Notion 失败: {str(e)}")
-            if hasattr(e, 'response'):
-                logger.error(f"Notion API 响应: {e.response.text}")
-            raise
 
     def get_page_content_by_md(self, md_content):
         """从 markdown 获取标题"""
@@ -345,22 +246,6 @@ class WebClipperHandler:
                             if soup.find(tag):
                                 title = soup.find(tag).get_text(strip=True)
                                 break
-                    
-                    # 清理标题
-                    # if title:
-                    #     title = ' '.join(title.split())
-                    #     title = re.sub(r'\s*[-|]\s*.*$', '', title)
-                    # else:
-                    #     title = os.path.basename(url)
-                    
-                    # 提取正文内容
-                    # for script in soup(["script", "style"]):
-                    #     script.decompose()
-                    
-                    # text = soup.get_text()
-                    # lines = (line.strip() for line in text.splitlines())
-                    # chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                    # text = ' '.join(chunk for chunk in chunks if chunk)
 
                     # 提取正文内容
                     html2markdown = html2text.HTML2Text()
@@ -384,20 +269,6 @@ class WebClipperHandler:
             text=message
         )
 
-@app.on_event("startup")
-async def startup_event():
-    """启动时初始化"""
-    global handler
-    from config import CONFIG
-    handler = WebClipperHandler(CONFIG)
-    UPLOAD_DIR.mkdir(exist_ok=True)
-    
-    # 如果配置中没有 API key，生成一个
-    if 'api_key' not in CONFIG:
-        CONFIG['api_key'] = secrets.token_urlsafe(32)
-        logger.info(f"Generated new API key: {CONFIG['api_key']}")
-
-@app.post("/upload/")
 @limiter.limit("10/minute", key_func=get_remote_address)
 async def upload_file(
     request: Request,
@@ -452,7 +323,7 @@ async def upload_file(
             return result
         finally:
             if file_path.exists():
-                file_path.unlink()
+                file_path.unlink()  # 这里会删除单个处理完的文件
                 
     except HTTPException:
         raise

@@ -6,7 +6,6 @@
 
 - 🚀 支持上传 HTML 文件到 GitHub Pages
 - 📚 自动同步到 Notion 数据库
-- 🤖 使用 AI 自动生成摘要和标签
 - 📱 通过 Telegram 发送剪藏通知
 - 🔒 API 密钥认证
 - 🔄 自动重试机制
@@ -69,15 +68,3 @@ curl -X POST "http://your-instance-url/upload" \
     "notion_url": "https://..."
 }
 ```
-
-## 本地操作
-
-1. 浏览器安装 singlefile 插件 https://chromewebstore.google.com/detail/singlefile/mpiodijhokgodhhofbcjdecpffjipkle
-2. 配置插件（只需要配置一次，支持云端同步）： 
-	1. 文件名-模版： {url-host}{url-pathname-flat}.{filename-extension}   
-	2. 文件名-最大长度：   384字符
-	3. 文件名-替换字符：$
-	4. 保存位置-保存到 REST 表单 API-网址: 你的服务器 ip，自行解决端口访问问题
-	5. 保存位置-保存到 REST 表单 API-授权令牌： 第二步里面配置的 Bearer Key
-	6. 保存位置-保存到 REST 表单 API-文件字段名称： singlehtmlfile
-	7. 保存位置-保存到 REST 表单 API-网址字段名称： url

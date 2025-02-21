@@ -1,0 +1,9 @@
+services:
+  web-clipper:
+    build: .
+    container_name: web-clipper
+    restart: unless-stopped
+    ports:
+      - "65331:65331"
+    volumes:
+      - ./config.py:/app/config.py 
