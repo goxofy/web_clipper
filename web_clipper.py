@@ -149,7 +149,7 @@ class WebClipperHandler:
             logger.info(f"📝 摘要: {summary[:100]}...")
             logger.info(f"🏷️ 标签: {', '.join(tags)}")
             
-            })
+
             notion_url = await loop.run_in_executor(None, self.save_to_notion, {
                 'title': title,
                 'original_url': original_url,
