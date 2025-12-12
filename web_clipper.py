@@ -206,7 +206,19 @@ class WebClipperHandler:
             branch="main"
         )
         
-        github_url = f"https://{self.config['github_pages_domain']}/{self.config['github_repo'].split('/')[1]}/clips/{filename}"
+        # 清理和规范化域名
+        domain = self.config['github_pages_domain'].strip()
+        if domain.startswith(('http://', 'https://')):
+            base_url = domain.rstrip('/')
+        else:
+            base_url = f"https://{domain}".rstrip('/')
+            
+        # 检查域名是否已经包含 repo name（针对默认的 github.io 域名）
+        repo_name = self.config['github_repo'].split('/')[1]
+        if repo_name in base_url and 'github.io' in base_url:
+             github_url = f"{base_url}/clips/{filename}"
+        else:
+             github_url = f"{base_url}/{repo_name}/clips/{filename}"
         
         # 等待 GitHub Pages 部署
         max_retries = self.config.get('github_pages_max_retries', 60)
