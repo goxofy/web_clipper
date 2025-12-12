@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   web_clipper:
-    build: .
+    image: ghcr.io/goxofy/web_clipper:latest
     container_name: web_clipper_server
     ports:
       - "65331:65331"

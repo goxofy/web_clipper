@@ -43,15 +43,36 @@
 2. 获取 Bot Token
 3. 获取聊天 ID
 
-## 使用方法
+## 部署与运行
 
-1. 启动服务：
+### 方式一：Docker 部署（推荐）
 
-```bash
-python main.py
-```
+直接使用 `docker-compose` 启动，无需安装 Python 环境。
 
-2. 发送请求：
+1. 确保已安装 Docker 和 Docker Compose。
+2. 修改 `docker-compose.yml` 中的环境变量（参考上方[配置说明](#配置说明)）。
+3. 启动服务：
+   ```bash
+   docker-compose up -d
+   ```
+
+### 方式二：源码运行
+
+1. 安装依赖：
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. 创建 `.env` 文件并在其中配置环境变量。
+3. 启动服务：
+   ```bash
+   python main.py
+   ```
+
+## 快速测试
+
+可以使用 curl 命令测试服务是否正常运行：
+
+
 
 ```bash
 curl -X POST "http://your-instance-url/upload" \
