@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.DS_Store
+.git
+.gitignore
+uploads/
+README.md
+task.md
+implementation_plan.md
+walkthrough.md

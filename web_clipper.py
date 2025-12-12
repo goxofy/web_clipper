@@ -128,11 +128,12 @@ class WebClipperHandler:
             logger.info("🔄 开始处理新的网页剪藏...")
             
             # 1. 上传到 GitHub Pages
-            filename, github_url = self.upload_to_github(str(file_path))
+            loop = asyncio.get_running_loop()
+            filename, github_url = await loop.run_in_executor(None, self.upload_to_github, str(file_path))
             logger.info(f"📤 GitHub 上传成功: {github_url}")
 
             # Github URL 转换为 Markdown
-            md_content = self.url2md(github_url)
+            md_content = await loop.run_in_executor(None, self.url2md, github_url)
             
             # 2. 获取页面标题
             title = self.get_page_content_by_md(md_content)
@@ -144,12 +145,12 @@ class WebClipperHandler:
                 original_url = file_info['original_url']
             
             # 3. 生成摘要和标签
-            summary, tags = self.generate_summary_tags(md_content)
+            summary, tags = await loop.run_in_executor(None, self.generate_summary_tags, md_content)
             logger.info(f"📝 摘要: {summary[:100]}...")
             logger.info(f"🏷️ 标签: {', '.join(tags)}")
             
-            # 4. 保存到 Notion
-            notion_url = self.save_to_notion({
+            })
+            notion_url = await loop.run_in_executor(None, self.save_to_notion, {
                 'title': title,
                 'original_url': original_url,
                 'snapshot_url': github_url,
